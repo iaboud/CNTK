@@ -231,7 +231,7 @@ void Matrix<ElemType>::SetDataLocation(CurrentDataLocation location, MatrixType 
     //       -> FORBIDDEN to write into
     //     - CPU or GPU -> BOTH: current state is CPU or GPU
     //       and a view onto it is put into BOTH state
-    //       -> OK but inefficent to read, since this is likely happening over again; but we cannot put all views into BOTH state
+    //       -> OK but inefficient to read, since this is likely happening over again; but we cannot put all views into BOTH state
     //     - BOTH -> BOTH:
     //        - read case: OK
     //        - write case: forbidden to call this function in this way
@@ -1421,6 +1421,22 @@ void Matrix<ElemType>::SetMatrixFromCSCFormat(const CPUSPARSE_INDEX_TYPE* h_CSCC
         { m_GPUSparseMatrix->SetMatrixFromCSCFormat(h_CSCCol, h_Row, h_Val, nz, numRows, numCols, false, -1, transferer); });
 }
 
+///
+/// adjusts the sparse block column matrix with the new Col2BlockId
+/// For each column, if new Col2BlockId contains valid index, a corresponding block exists at the index
+/// if old col2BlockId[i] contains value at that column, it would be copied over; otherwise the block would be filled with zeros
+///
+template <class ElemType>
+void Matrix<ElemType>::AdjustSparseBlockColumn(const GPUSPARSE_INDEX_TYPE* cpuCol2BlockId, size_t numBlocks, bool useBlockId2Col)
+{
+    DISPATCH_MATRIX_ON_FLAG(this,
+        this,
+        NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED,
+        m_GPUSparseMatrix->AdjustCol2BlockId(cpuCol2BlockId, numBlocks, useBlockId2Col));
+}
+
 template <class ElemType>
 void Matrix<ElemType>::SetDiagonalValue(const ElemType v)
 {
@@ -1493,6 +1509,48 @@ void Matrix<ElemType>::SetUniformRandomValue(const ElemType low, const ElemType 
                             m_GPUMatrix->SetUniformRandomValue(low, high, seed),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
+}
+
+template <class ElemType>
+void Matrix<ElemType>::SetUniformRandomValue(RNGHandle& rngHandle, const ElemType low, const ElemType high)
+{
+    if (IsEmpty())
+        return;
+
+    DISPATCH_MATRIX_ON_FLAG(this,
+        this,
+        m_CPUMatrix->SetUniformRandomValue(rngHandle, low, high),
+        m_GPUMatrix->SetUniformRandomValue(rngHandle, low, high),
+        NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED);
+}
+
+template <class ElemType>
+void Matrix<ElemType>::SetGaussianRandomValue(RNGHandle& rngHandle, const ElemType mean, const ElemType stdev)
+{
+    if (IsEmpty())
+        return;
+
+    DISPATCH_MATRIX_ON_FLAG(this,
+        this,
+        m_CPUMatrix->SetGaussianRandomValue(rngHandle, mean, stdev),
+        m_GPUMatrix->SetGaussianRandomValue(rngHandle, mean, stdev),
+        NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED);
+}
+
+template <class ElemType>
+void Matrix<ElemType>::SetGumbelRandomValue(RNGHandle& rngHandle, const ElemType loc, const ElemType scale)
+{
+    if (IsEmpty())
+        return;
+
+    DISPATCH_MATRIX_ON_FLAG(this,
+        this,
+        m_CPUMatrix->SetGumbelRandomValue(rngHandle, loc, scale),
+        m_GPUMatrix->SetGumbelRandomValue(rngHandle, loc, scale),
+        NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED);
 }
 
 template <class ElemType>
@@ -1598,11 +1656,9 @@ void Matrix<ElemType>::MomentumSGDUpdate(Matrix<ElemType>& gradients,
                                          Matrix<ElemType>& smoothedGradients,
                                          ElemType learnRatePerSample,
                                          ElemType momentum,
-                                         bool unitGainMomentum)
+                                         ElemType unitGainFactor)
 {
     DecideAndMoveToRightDevice(smoothedGradients, gradients, *this);
-
-    const auto unitGainFactor = ElemType(unitGainMomentum ? (1.0 - momentum) : 1.0);
 
     DISPATCH_MATRIX_ON_FLAG(&gradients, nullptr,
         { 
@@ -1628,14 +1684,14 @@ void Matrix<ElemType>::MomentumSGDUpdate(Matrix<ElemType>& gradients,
             // 3) w_t = w_{t-1} - learnRatePerSample * g'_{t-1}
             if (momentum != 0)
             {
-                gradients.m_CPUSparseMatrix->NormalGrad(*smoothedGradients.m_CPUMatrix, momentum, unitGainMomentum);
+                gradients.m_CPUSparseMatrix->NormalGrad(*smoothedGradients.m_CPUMatrix, momentum, unitGainFactor);
             }
             ScaleAndAdd(-learnRatePerSample, gradients, *this);
         },
         { 
             if (momentum != 0)
             {
-                gradients.m_GPUSparseMatrix->NormalGrad(*smoothedGradients.m_GPUMatrix, momentum, unitGainMomentum);
+                gradients.m_GPUSparseMatrix->NormalGrad(*smoothedGradients.m_GPUMatrix, momentum, unitGainFactor);
             }
             ScaleAndAdd(-learnRatePerSample, gradients, *this);
         });
@@ -1648,11 +1704,9 @@ void Matrix<ElemType>::NesterovAcceleratedMomentumSGDUpdate(Matrix<ElemType>& gr
                                                             Matrix<ElemType>& smoothedGradients,
                                                             ElemType learnRatePerSample,
                                                             ElemType momentum,
-                                                            bool unitGainMomentum)
+                                                            ElemType unitGainFactor)
 {
     DecideAndMoveToRightDevice(smoothedGradients, gradients, *this);
-
-    const auto unitGainFactor = ElemType(unitGainMomentum ? (1.0 - momentum) : 1.0);
 
     DISPATCH_MATRIX_ON_FLAG(&gradients, nullptr,
         { /* CPU dense */
@@ -1678,7 +1732,7 @@ void Matrix<ElemType>::NesterovAcceleratedMomentumSGDUpdate(Matrix<ElemType>& gr
                 // gradient values in place, so that gradientCache is needed to store the original values.
                 Matrix<ElemType> gradientCache(gradients.GetDeviceId());
                 gradientCache.AssignValuesOf(gradients);
-                gradients.m_CPUSparseMatrix->NormalGrad(*smoothedGradients.m_CPUMatrix, momentum, unitGainMomentum);
+                gradients.m_CPUSparseMatrix->NormalGrad(*smoothedGradients.m_CPUMatrix, momentum, unitGainFactor);
                 ScaleAndAdd(-momentum, smoothedGradients, *this);
                 ScaleAndAdd(-unitGainFactor * learnRatePerSample, gradientCache, *this);
             }
@@ -1688,7 +1742,7 @@ void Matrix<ElemType>::NesterovAcceleratedMomentumSGDUpdate(Matrix<ElemType>& gr
             {
                 Matrix<ElemType> gradientCache(gradients.GetDeviceId());
                 gradientCache.AssignValuesOf(gradients);
-                gradients.m_GPUSparseMatrix->NormalGrad(*smoothedGradients.m_GPUMatrix, momentum, unitGainMomentum);
+                gradients.m_GPUSparseMatrix->NormalGrad(*smoothedGradients.m_GPUMatrix, momentum, unitGainFactor);
                 ScaleAndAdd(-momentum, smoothedGradients, *this);
                 ScaleAndAdd(-unitGainFactor * learnRatePerSample, gradientCache, *this);
             }
@@ -1717,35 +1771,29 @@ ElemType Matrix<ElemType>::Adagrad(Matrix<ElemType>& gradients, const bool needA
 // then
 //  - the model itself
 template <class ElemType>
-void Matrix<ElemType>::FSAdagradUpdate(size_t mbSize,
-                                       Matrix<ElemType>& gradients, Matrix<ElemType>& functionValues, double& smoothedCount,
-                                       const double learnRatePerSample, const double targetAdagradAvDenom,
-                                       const double meanMomentum, const double varMomentum, bool unitGainMomentum)
+void Matrix<ElemType>::FSAdagradUpdate(Matrix<ElemType>& gradients, Matrix<ElemType>& functionValues, const double targetAdagradAvDenom_x_sqrtAdagradSqrFrames,
+                                       const double learnRatePerSample, const double meanMomentum, const double varMomentum, ElemType unitGainFactor)
 {
-    // keep track on how many samples have been accumulated into the g^2 accumulator
-    smoothedCount = varMomentum * smoothedCount + (1.0 - varMomentum) * mbSize;
-
-    // update the numerator and then do the meanMomentum-based model update
-    // Each AdaGrad-normalized gradient value is multiplied by the following, which
-    //  - makes up for general scaling (targetAdagradAvDenom, a constant chosen by the user that should resemble the typical value range of gradients)
-    //  - sqrt(1/#samples accumulated) to turn the sqr sum into an average
-    let targetAdagradAvDenom_x_sqrtAdagradSqrFrames = (ElemType)(targetAdagradAvDenom * sqrt(smoothedCount));
-
     DISPATCH_MATRIX_ON_FLAG(&gradients, &gradients,
         { 
             m_CPUMatrix->FSAdagrad(*gradients.m_CPUMatrix, *functionValues.m_CPUMatrix, 
                                    (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum, 
-                                   targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainMomentum); 
+                                   (ElemType)targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainFactor);
             SetDataLocation(CPU); 
         },
         {
             m_GPUMatrix->FSAdagrad(*gradients.m_GPUMatrix, *functionValues.m_GPUMatrix, 
                                    (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum, 
-                                   targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainMomentum); 
+                                   (ElemType)targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainFactor);
             SetDataLocation(GPU); 
         },
         { NOT_IMPLEMENTED; },
-        { gradients.m_GPUSparseMatrix->FSAdagrad(*m_GPUMatrix, *functionValues.m_GPUMatrix, (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum, targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainMomentum); SetDataLocation(GPU); });
+        {
+            gradients.m_GPUSparseMatrix->FSAdagrad(*m_GPUMatrix, *functionValues.m_GPUMatrix, 
+                                                   (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum,
+                                                   (ElemType)targetAdagradAvDenom_x_sqrtAdagradSqrFrames, unitGainFactor);
+            SetDataLocation(GPU); 
+        });
 
     // Note: Since both 'this' and gradients are changed, we must call SetDataLocation() on 'this' as well.
 }
@@ -1755,10 +1803,9 @@ void Matrix<ElemType>::FSAdagradUpdate(size_t mbSize,
 // Ref: ADAM: A METHOD FOR STOCHASTIC OPTIMIZATION, https://arxiv.org/pdf/1412.6980.pdf
 ///
 template <class ElemType>
-void Matrix<ElemType>::AdamUpdate(Matrix<ElemType>& gradients, Matrix<ElemType>& functionValues, double& smoothedCount,
-    const double learnRatePerSample, const double meanMomentum, const double varMomentum, const double epsilon, bool unitGainMomentum, bool adamax)
+void Matrix<ElemType>::AdamUpdate(Matrix<ElemType>& gradients, Matrix<ElemType>& functionValues, const double smoothedCount,
+    const double learnRatePerSample, const double meanMomentum, const double varMomentum, const double epsilon, ElemType unitGainFactor, bool adamax)
 {
-    smoothedCount++;
     // Bias correction
     let biasCorrection = adamax? (ElemType)(1. / (1- pow(meanMomentum, smoothedCount))) : (ElemType)(sqrt(1- pow(varMomentum, smoothedCount))/(1- pow(meanMomentum, smoothedCount)));
 
@@ -1766,19 +1813,19 @@ void Matrix<ElemType>::AdamUpdate(Matrix<ElemType>& gradients, Matrix<ElemType>&
     {
         m_CPUMatrix->Adam(*gradients.m_CPUMatrix, *functionValues.m_CPUMatrix,
         (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum,
-        biasCorrection, (ElemType)epsilon, unitGainMomentum, adamax);
+        biasCorrection, (ElemType)epsilon, unitGainFactor, adamax);
         SetDataLocation(CPU);
     },
     {
         m_GPUMatrix->Adam(*gradients.m_GPUMatrix, *functionValues.m_GPUMatrix,
         (ElemType)learnRatePerSample, (ElemType)meanMomentum, (ElemType)varMomentum,
-        biasCorrection, (ElemType)epsilon, unitGainMomentum, adamax);
+        biasCorrection, (ElemType)epsilon, unitGainFactor, adamax);
         SetDataLocation(GPU);
     },
     { NOT_IMPLEMENTED; },
     { gradients.m_GPUSparseMatrix->Adam(*m_GPUMatrix, *functionValues.m_GPUMatrix, 
         (ElemType)learnRatePerSample, (ElemType)meanMomentum, 
-        (ElemType)varMomentum, biasCorrection, (ElemType)epsilon, unitGainMomentum, adamax); 
+        (ElemType)varMomentum, biasCorrection, (ElemType)epsilon, unitGainFactor, adamax);
         SetDataLocation(GPU); });
 
     // Note: Since both 'this' and gradients are changed, we must call SetDataLocation() on 'this' as well.
@@ -1791,15 +1838,16 @@ ElemType Matrix<ElemType>::RmsProp(Matrix<ElemType>& gradients,
                                    ElemType RMS_WGT_MAX,
                                    ElemType RMS_WGT_DEC,
                                    ElemType RMS_WGT_MIN,
-                                   const bool needAveMultiplier)
+                                   const bool needAveMultiplier,
+                                   const bool initialized)
 {
     DecideAndMoveToRightDevice(*this, gradients);
 
     DISPATCH_MATRIX_ON_FLAG(&gradients, &gradients,
-        { return m_CPUMatrix->RmsProp(*gradients.m_CPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier); SetDataLocation(CPU); },
-        { return m_GPUMatrix->RmsProp(*gradients.m_GPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier); SetDataLocation(GPU); },
+        { return m_CPUMatrix->RmsProp(*gradients.m_CPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier, initialized); SetDataLocation(CPU); },
+        { return m_GPUMatrix->RmsProp(*gradients.m_GPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier, initialized); SetDataLocation(GPU); },
         { NOT_IMPLEMENTED; },
-        { return gradients.m_GPUSparseMatrix->RmsProp(*m_GPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier); SetDataLocation(GPU); });
+        { return gradients.m_GPUSparseMatrix->RmsProp(*m_GPUMatrix, RMS_GAMMA, RMS_WGT_INC, RMS_WGT_MAX, RMS_WGT_DEC, RMS_WGT_MIN, needAveMultiplier, initialized); SetDataLocation(GPU); });
     // Note: Since both 'this' and gradients are changed, we must call SetDataLocation() on 'this' as well.
 }
 
@@ -3091,6 +3139,138 @@ Matrix<ElemType>& Matrix<ElemType>::AssignNegativeSineOf(const Matrix<ElemType>&
                             this,
                             m_CPUMatrix->AssignNegativeSineOf(*a.m_CPUMatrix),
                             m_GPUMatrix->AssignNegativeSineOf(*a.m_GPUMatrix),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+//[this]=acos([this]) element wise
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::InplaceAcos()
+{
+    DISPATCH_MATRIX_ON_FLAG(this,
+                            this,
+                            m_CPUMatrix->InplaceAcos(),
+                            m_GPUMatrix->InplaceAcos(),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::AssignAcosOf(const Matrix<ElemType>& a)
+{
+    if (a.IsEmpty())
+        LogicError("AssignAcosOf: Matrix a is empty.");
+
+    DecideAndMoveToRightDevice(a, *this);
+    SwitchToMatrixType(a.GetMatrixType(), a.GetFormat(), false);
+
+    DISPATCH_MATRIX_ON_FLAG(&a,
+                            this,
+                            m_CPUMatrix->AssignAcosOf(*a.m_CPUMatrix),
+                            m_GPUMatrix->AssignAcosOf(*a.m_GPUMatrix),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+//[this]=asin([this]) element wise
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::InplaceAsin()
+{
+    DISPATCH_MATRIX_ON_FLAG(this,
+                            this,
+                            m_CPUMatrix->InplaceAsin(),
+                            m_GPUMatrix->InplaceAsin(),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::AssignAsinOf(const Matrix<ElemType>& a)
+{
+    if (a.IsEmpty())
+        LogicError("AssignAsinOf: Matrix a is empty.");
+
+    DecideAndMoveToRightDevice(a, *this);
+    SwitchToMatrixType(a.GetMatrixType(), a.GetFormat(), false);
+
+    DISPATCH_MATRIX_ON_FLAG(&a,
+                            this,
+                            m_CPUMatrix->AssignAsinOf(*a.m_CPUMatrix),
+                            m_GPUMatrix->AssignAsinOf(*a.m_GPUMatrix),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+//[this]=cosh([this]) element wise
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::InplaceCosh()
+{
+    DISPATCH_MATRIX_ON_FLAG(this,
+                            this,
+                            m_CPUMatrix->InplaceCosh(),
+                            m_GPUMatrix->InplaceCosh(),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::AssignCoshOf(const Matrix<ElemType>& a)
+{
+    if (a.IsEmpty())
+        LogicError("AssignCoshOf: Matrix a is empty.");
+
+    DecideAndMoveToRightDevice(a, *this);
+    SwitchToMatrixType(a.GetMatrixType(), a.GetFormat(), false);
+
+    DISPATCH_MATRIX_ON_FLAG(&a,
+                            this,
+                            m_CPUMatrix->AssignCoshOf(*a.m_CPUMatrix),
+                            m_GPUMatrix->AssignCoshOf(*a.m_GPUMatrix),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+//[this]=sinh([this]) element wise
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::InplaceSinh()
+{
+    DISPATCH_MATRIX_ON_FLAG(this,
+                            this,
+                            m_CPUMatrix->InplaceSinh(),
+                            m_GPUMatrix->InplaceSinh(),
+                            NOT_IMPLEMENTED,
+                            NOT_IMPLEMENTED);
+
+    return *this;
+}
+
+template <class ElemType>
+Matrix<ElemType>& Matrix<ElemType>::AssignSinhOf(const Matrix<ElemType>& a)
+{
+    if (a.IsEmpty())
+        LogicError("AssignSinhOf: Matrix a is empty.");
+
+    DecideAndMoveToRightDevice(a, *this);
+    SwitchToMatrixType(a.GetMatrixType(), a.GetFormat(), false);
+
+    DISPATCH_MATRIX_ON_FLAG(&a,
+                            this,
+                            m_CPUMatrix->AssignSinhOf(*a.m_CPUMatrix),
+                            m_GPUMatrix->AssignSinhOf(*a.m_GPUMatrix),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
 
@@ -4538,7 +4718,7 @@ void Matrix<ElemType>::MaxPoolingForward(const Matrix<int>& mpRowCol, const Matr
 template <class ElemType>
 void Matrix<ElemType>::MaxPoolingBackward(const Matrix<ElemType>& out, const Matrix<ElemType>& in,
                                           const Matrix<int>& mpRowCol, const Matrix<int>& mpRowIndices, const Matrix<int>& indices,
-                                          Matrix<ElemType>& grad) const
+                                          Matrix<ElemType>& grad, bool accumulateGradient) const
 {
     assert(mpRowCol.GetNumCols() == 1);
     assert(mpRowIndices.GetNumCols() == 1);
@@ -4551,40 +4731,40 @@ void Matrix<ElemType>::MaxPoolingBackward(const Matrix<ElemType>& out, const Mat
                             this,
                             m_CPUMatrix->MaxPoolingBackward(*(out.m_CPUMatrix), *(in.m_CPUMatrix),
                                                               *(mpRowCol.m_CPUMatrix), *(mpRowIndices.m_CPUMatrix), *(indices.m_CPUMatrix),
-                                                              *(grad.m_CPUMatrix)),
+                                                              *(grad.m_CPUMatrix), accumulateGradient),
                             m_GPUMatrix->MaxPoolingBackward(*(out.m_GPUMatrix), *(in.m_GPUMatrix),
                                                               *(mpRowCol.m_GPUMatrix), *(mpRowIndices.m_GPUMatrix), *(indices.m_GPUMatrix),
-                                                              *(grad.m_GPUMatrix)),
+                                                              *(grad.m_GPUMatrix), accumulateGradient),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
 }
 
 template <class ElemType>
-void Matrix<ElemType>::ROIPoolingForward(const size_t numRois, const size_t numImg, const size_t channels, const size_t width, const size_t height,
-                                         const size_t pooledWidth, const size_t pooledHeight, const Matrix<ElemType>& roiData, Matrix<ElemType>& output, 
-                                         Matrix<ElemType>& argmax) const
+void Matrix<ElemType>::MaxROIPoolingForward(const size_t numRois, const size_t numImg, const size_t channels, const size_t width, const size_t height,
+                                           const size_t pooledWidth, const size_t pooledHeight, const Matrix<ElemType>& roiData, Matrix<ElemType>& output, 
+                                           Matrix<ElemType>& argmax, double spatialScale) const
 {
     DecideAndMoveToRightDevice(*this, output);
 
     DISPATCH_MATRIX_ON_FLAG(this,
                             this,
-                            m_CPUMatrix->ROIPoolingForward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_CPUMatrix), *(output.m_CPUMatrix), *(argmax.m_CPUMatrix)),
-                            m_GPUMatrix->ROIPoolingForward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_GPUMatrix), *(output.m_GPUMatrix), *(argmax.m_GPUMatrix)),
+                            m_CPUMatrix->MaxROIPoolingForward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_CPUMatrix), *(output.m_CPUMatrix), *(argmax.m_CPUMatrix), spatialScale),
+                            m_GPUMatrix->MaxROIPoolingForward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_GPUMatrix), *(output.m_GPUMatrix), *(argmax.m_GPUMatrix), spatialScale),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
 }
 
 template <class ElemType>
-void Matrix<ElemType>::ROIPoolingBackward(const size_t numRois, const size_t numImg, const size_t channels, const size_t width, const size_t height,
-                                          const size_t pooledWidth, const size_t pooledHeight, const Matrix<ElemType>& roiData, Matrix<ElemType>& grad, 
-                                          Matrix<ElemType>& argmax) const
+void Matrix<ElemType>::MaxROIPoolingBackward(const size_t numRois, const size_t numImg, const size_t channels, const size_t width, const size_t height,
+                                             const size_t pooledWidth, const size_t pooledHeight, const Matrix<ElemType>& roiData, Matrix<ElemType>& grad, 
+                                             Matrix<ElemType>& argmax, double spatialScale) const
 {
     DecideAndMoveToRightDevice(*this, grad);
 
     DISPATCH_MATRIX_ON_FLAG(this,
                             this,
-                            m_CPUMatrix->ROIPoolingBackward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_CPUMatrix), *(grad.m_CPUMatrix), *(argmax.m_CPUMatrix)),
-                            m_GPUMatrix->ROIPoolingBackward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_GPUMatrix), *(grad.m_GPUMatrix), *(argmax.m_GPUMatrix)),
+                            m_CPUMatrix->MaxROIPoolingBackward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_CPUMatrix), *(grad.m_CPUMatrix), *(argmax.m_CPUMatrix), spatialScale),
+                            m_GPUMatrix->MaxROIPoolingBackward(numRois, numImg, channels, width, height, pooledWidth, pooledHeight, *(roiData.m_GPUMatrix), *(grad.m_GPUMatrix), *(argmax.m_GPUMatrix), spatialScale),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
 }
@@ -4633,7 +4813,7 @@ void Matrix<ElemType>::AveragePoolingForward(const Matrix<int>& mpRowCol, const 
 }
 
 template <class ElemType>
-void Matrix<ElemType>::AveragePoolingBackward(const Matrix<int>& mpRowCol, const Matrix<int>& mpRowIndices, const Matrix<int>& indices, Matrix<ElemType>& grad, const bool poolIncludePad) const
+void Matrix<ElemType>::AveragePoolingBackward(const Matrix<int>& mpRowCol, const Matrix<int>& mpRowIndices, const Matrix<int>& indices, Matrix<ElemType>& grad, const bool poolIncludePad, bool accumulateGradient) const
 {
     assert(mpRowCol.GetNumCols() == 1);
     assert(mpRowIndices.GetNumCols() == 1);
@@ -4644,8 +4824,8 @@ void Matrix<ElemType>::AveragePoolingBackward(const Matrix<int>& mpRowCol, const
     // REVIEW alexeyk: add sparse version.
     DISPATCH_MATRIX_ON_FLAG(this,
                             this,
-                            m_CPUMatrix->AveragePoolingBackward(*(mpRowCol.m_CPUMatrix), *(mpRowIndices.m_CPUMatrix), *(indices.m_CPUMatrix), *(grad.m_CPUMatrix), poolIncludePad),
-                            m_GPUMatrix->AveragePoolingBackward(*(mpRowCol.m_GPUMatrix), *(mpRowIndices.m_GPUMatrix), *(indices.m_GPUMatrix), *(grad.m_GPUMatrix)),
+                            m_CPUMatrix->AveragePoolingBackward(*(mpRowCol.m_CPUMatrix), *(mpRowIndices.m_CPUMatrix), *(indices.m_CPUMatrix), *(grad.m_CPUMatrix), poolIncludePad, accumulateGradient),
+                            m_GPUMatrix->AveragePoolingBackward(*(mpRowCol.m_GPUMatrix), *(mpRowIndices.m_GPUMatrix), *(indices.m_GPUMatrix), *(grad.m_GPUMatrix), accumulateGradient),
                             NOT_IMPLEMENTED,
                             NOT_IMPLEMENTED);
 }
@@ -5310,7 +5490,7 @@ void Matrix<ElemType>::Scale(ElemType alpha, Matrix<ElemType>& a)
                                 &a,
                                 CPUMatrix<ElemType>::Scale(alpha, *a.m_CPUMatrix),
                                 GPUMatrix<ElemType>::Scale(alpha, *a.m_GPUMatrix),
-                                NOT_IMPLEMENTED,
+                                CPUSparseMatrix<ElemType>::Scale(alpha, *a.m_CPUSparseMatrix),
                                 GPUSparseMatrix<ElemType>::Scale(alpha, *a.m_GPUSparseMatrix));
 }
 
@@ -5839,7 +6019,7 @@ Matrix<ElemType>& Matrix<ElemType>::AssignSequenceError(const ElemType hsmoothin
 // phoneBound (input): phone boundary (frame index) of each phone for each utterance in this minibatch, each col is one utterance 
 // totalScore (output): total CTC score
 // uttToChanInd (input):  map from utterance ID to minibatch channel ID. We need this because each channel may contain more than one utterance.
-// uttBeginFrame(input): the positon of the first frame of each utterance in the minibatch channel. We need this because each channel may contain more than one utterance.
+// uttBeginFrame(input): the position of the first frame of each utterance in the minibatch channel. We need this because each channel may contain more than one utterance.
 // uttFrameNum (input): the frame number of each utterance. The size of this vector =  the number of all utterances in this minibatch
 // uttPhoneNum (input): the phone number of each utterance. The size of this vector =  the number of all utterances in this minibatch
 // numParallelSequences (input): num of parallel sequences

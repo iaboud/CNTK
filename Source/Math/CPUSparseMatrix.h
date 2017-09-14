@@ -136,6 +136,7 @@ public:
 
     static void ColumnwiseScaleAndWeightedAdd(ElemType alpha, const CPUSparseMatrix<ElemType>& a, const CPUMatrix<ElemType>& v, ElemType beta, CPUMatrix<ElemType>& c);
 
+    static void Scale(const ElemType alpha, CPUSparseMatrix<ElemType>& rhs);
     static void ScaleAndAdd(const ElemType alpha, const CPUSparseMatrix<ElemType>& lhs, CPUMatrix<ElemType>& c);
 
     static bool AreEqual(const CPUSparseMatrix<ElemType>& a, const CPUSparseMatrix<ElemType>& b, const ElemType threshold = 1e-8);
@@ -166,7 +167,7 @@ public:
 
 
     // Allocate actually allocates the storage space for numNZElemToReserve elements. This is different than resizing, which changes the dimensions of the underlying matrix.
-    // Unfortunately numRows/numCols need to be passed in in the case of various matrix formats (e.g., SparseCSC), because some of the dimensions allocated depend on the
+    // Unfortunately numRows/numCols need to be passed in the case of various matrix formats (e.g., SparseCSC), because some of the dimensions allocated depend on the
     // dimensions of the matrix.
     void Allocate(const size_t numRows, const size_t numCols, const size_t numNZElemToReserve = 10000, const bool growOnly = true, bool keepExistingValues = false); // matrix format will affect the size to allocate
     // RequireSizeAndAllocate is required by SpasreMatrix since resizing the dimensions and allocating storage are different operations. Since a Resize can entail changing
@@ -229,7 +230,7 @@ public:
     }
 
 public:
-    void NormalGrad(CPUMatrix<ElemType>& c, const ElemType momentum, bool unitGainMomentum = true);
+    void NormalGrad(CPUMatrix<ElemType>& c, const ElemType momentum, ElemType unitGainFactor);
     ElemType Adagrad(CPUMatrix<ElemType>& c, const bool needAveMultiplier);
     void AdaDelta(CPUMatrix<ElemType>& c, CPUMatrix<ElemType>& functionValues, ElemType learningRate, ElemType rho, ElemType epsilon);
 
@@ -311,7 +312,7 @@ public:
 
     // Returns the start of the secondary index valid for the slice-view.
     // Secondary index provides the offset to the data buffer for the values.
-    // E.g. for CSC the the first nonzero value of column k is Buffer(SecondaryIndexLocation[k])
+    // E.g. for CSC the first nonzero value of column k is Buffer(SecondaryIndexLocation[k])
     CPUSPARSE_INDEX_TYPE* SecondaryIndexLocation() const
     {
         return GetCompIndex() + m_sliceViewOffset;

@@ -20,7 +20,7 @@ public class Main {
         System.out.println("Working Directory = " + System.getProperty("user.dir"));
 
         DeviceDescriptor device = DeviceDescriptor.useDefaultDevice();
-        File dataPath = new File(args[1]);
+        File dataPath = new File(args[0]);
 
 
         // Load the model.
@@ -30,11 +30,12 @@ public class Main {
         Function modelFunc = Function.load(new File(dataPath, "resnet20_cifar10_python.dnn").getAbsolutePath(), device);
         Variable outputVar = modelFunc.getOutputs().get(0);
         Variable inputVar = modelFunc.getArguments().get(0);
+        System.gc(); // This is not needed for normal usage. It is here just for testing that elements in getOutputs are not getting GC'd.
 
         NDShape inputShape = inputVar.getShape();
-        int imageWidth = inputShape.getDimensions().get(0).intValue();
-        int imageHeight = inputShape.getDimensions().get(1).intValue();
-        int imageChannels = inputShape.getDimensions().get(2).intValue();
+        int imageWidth = (int)inputShape.getDimensions()[0];
+        int imageHeight = (int)inputShape.getDimensions()[1];
+        int imageChannels = (int)inputShape.getDimensions()[2];
         int imageSize = ((int) inputShape.getTotalSize());
 
         System.out.println("EvaluateSingleImage");
@@ -92,16 +93,16 @@ public class Main {
 
 
         float[] expectedResults = {
-                2.820341f,
-                9.967621f,
-                0.028942442f,
-                4.349778f,
-                -12.51383f,
-                7.170159f,
-                -4.547992f,
-                -3.689762f,
-                -4.393841f,
-                1.4517201f};
+                -4.189664f,
+                -3.1175408f,
+                -1.7266451f,
+                17.445856f,
+                -3.7881997f,
+                7.442085f,
+                -3.8764064f,
+                -6.151011f,
+                3.721258f,
+                -5.6161685f};
 
         FloatVector results = outputBuffer.get(0);
         for (int j = 0; j < results.size(); j++) {

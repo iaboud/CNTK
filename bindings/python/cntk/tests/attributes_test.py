@@ -22,6 +22,7 @@ def test_convolution_attributes():
     expected = {'autoPadding': [False, False, False], 
         'sharing': [True, True, True], 
         'strides': (1, 1, 1), 
+        'dilation': (1, 1, 1),
         'maxTempMemSizeInSamples': 0, 
         'upperPad': (0, 0, 0), 
         'lowerPad': (0, 0, 0),
@@ -34,7 +35,8 @@ def test_convolution_attributes():
     d = f.root_function.attributes
     expected = {'autoPadding': [False, False, True], 
         'sharing': [True, True, True], 
-        'strides': (1, 1, 1), 
+        'strides': (1, 1, 1),
+        'dilation': (1, 1, 1),
         'maxTempMemSizeInSamples': 0, 
         'upperPad': (0, 0, 0), 
         'lowerPad': (0, 0, 0),
@@ -51,7 +53,8 @@ def test_convolution_transpose_attributes():
     d = f.root_function.attributes
     expected = {'autoPadding': [False, False, False], 
         'sharing': [True, True, True], 
-        'strides': (1, 1, 1), 
+        'strides': (1, 1, 1),
+        'dilation': (1, 1, 1),
         'maxTempMemSizeInSamples': 0, 
         'upperPad': (0, 0, 0), 
         'lowerPad': (0, 0, 0),
@@ -71,9 +74,9 @@ def test_slice_attributes():
     x = C.input_variable((2,3))
     f = C.slice(x, 0, 1, 2)
     d = f.root_function.attributes
-    expected = {'endIndex': 2, 'beginIndex': 1, 'axis': ('ordered', 'static', 1)}
+    expected = {'endIndex': 2, 'beginIndex': 1, 'axis': ('ordered', 'static', 1), 'sliceStrides': 1}
     _check(expected, d)
-    f = C.slice(x, [0,1], [1,0], [2,2])
+    f = C.slice(x, [0,1], [1,0], [2,2], [-1,1])
     d = f.root_function.attributes
-    expected = {'endIndexVec': [2,2], 'beginIndexVec': [1,0], 'axisVec': [('ordered', 'static', 1), ('ordered', 'static', 0)]}
+    expected = {'endIndexVec': [2,2], 'beginIndexVec': [1,0], 'axisVec': [('ordered', 'static', 1), ('ordered', 'static', 0)], 'sliceStridesVec': [-1, 1]}
     _check(expected, d)

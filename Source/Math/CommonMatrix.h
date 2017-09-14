@@ -38,8 +38,13 @@ typedef unsigned char byte;
 #define MINLOGEXP -9.2103
 #define LSMALL -0.5E10
 
+// TODO: merge these two types
 #define GPUSPARSE_INDEX_TYPE int // cuSparse only supports int array indexes
 #define CPUSPARSE_INDEX_TYPE int // to be consistent with cuSparse but limited the possible size of the matrix.
+
+// special markers in BlockId2ColOrRow()/ColOrRow2BlockId()
+static const GPUSPARSE_INDEX_TYPE SparseIndex_NotAssigned = -1; // the index is not used, for col2BlockId it means the column has no corresponding block
+static const GPUSPARSE_INDEX_TYPE SparseIndex_Pending = -2; // the index assignment is pending, a transitional state when counting new blocks when sparse += sparse * dense 
 
 namespace Microsoft { namespace MSR { namespace CNTK {
 
@@ -85,7 +90,7 @@ enum ElementWiseOperator
     // unary (or binary with constant parameter)
     opCopy,
     opNegate, opNot, opAbs, opFloor, opReciprocal,
-    opSigmoid, opTanh, opSqr, opSqrt, opExp, opLog, opLinearRectifier, opCosine, opSin, opExponentialLinearUnit, opStableSigmoid,
+    opSigmoid, opTanh, opSqr, opSqrt, opExp, opLog, opLinearRectifier, opCosine, opSin, opAcos, opAsin, opCosh, opSinh, opExponentialLinearUnit, opStableSigmoid,
     // unary ops for use by Matrix class only (there is no TensorView implementation)
     opSigmoidDerivative, opLinearRectifierDerivative, opNegativeSine, opExponentialLinearUnitDerivative, opStableSigmoidDerivative,
     // binary
@@ -96,6 +101,8 @@ enum ElementWiseOperator
     opElementwiseProductWithSigmoidDerivativeFromOutput, opElementwiseProductWithTanhDerivativeFromOutput,
     opElementwiseProductWithLinearRectifierDerivativeFromOutput, opElementwiseProductWithLogDerivativeFromOutput,
     opElementwiseProductWithCosDerivative, opElementwiseProductWithSinDerivative,
+    opElementwiseProductWithAcosDerivative, opElementwiseProductWithAsinDerivative,
+    opElementwiseProductWithCoshDerivative, opElementwiseProductWithSinhDerivative,
     opElementwiseProductWithAbsDerivative, opElementwiseProductWithSqrtDerivative,
     opElementwiseProductWithReciprocalDerivative, opSqrOfDifference,
     opElementwiseProductWithExponentialLinearUnitDerivativeFromOutput,
@@ -133,6 +140,10 @@ enum ElementWiseOperator
     Macro(LinearRectifier);       \
     Macro(Cosine);                \
     Macro(Sin);                   \
+    Macro(Acos);                  \
+    Macro(Asin);                  \
+    Macro(Cosh);                  \
+    Macro(Sinh);                  \
     Macro(ExponentialLinearUnit); \
     Macro(StableSigmoid);
 
@@ -163,6 +174,10 @@ enum ElementWiseOperator
     Macro(ElementwiseProductWithLogDerivativeFromOutput);                    \
     Macro(ElementwiseProductWithCosDerivative);                              \
     Macro(ElementwiseProductWithSinDerivative);                              \
+    Macro(ElementwiseProductWithAcosDerivative);                             \
+    Macro(ElementwiseProductWithAsinDerivative);                             \
+    Macro(ElementwiseProductWithCoshDerivative);                             \
+    Macro(ElementwiseProductWithSinhDerivative);                             \
     Macro(ElementwiseProductWithAbsDerivative);                              \
     Macro(ElementwiseProductWithReciprocalDerivative);                       \
     Macro(ElementwiseProductWithSqrtDerivative);                             \
